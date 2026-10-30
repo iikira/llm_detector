@@ -45,7 +45,7 @@ python probe_llm_api.py --base-url http://localhost:3000 --api-key sk-xxxx
 | `-k, --api-key` | API Key（也可用环境变量 `LLM_PROBE_API_KEY`） | 空 |
 | `--only` | 只测试格式：`openai` / `anthropic` / `both` | `both` |
 | `-p, --pattern` | 只测试名称匹配该正则的模型，如 `deepseek\|glm` | 全部 |
-| `-t, --timeout` | 单次请求超时（秒） | `180` |
+| `-t, --timeout` | 单次请求超时（秒） | `60` |
 | `-c, --concurrency` | 并发请求数 | `4` |
 | `--max-tokens` | 每次测试允许生成的 token 上限 | `256` |
 | `--multimodal` / `--no-multimodal` | 是否启用多模态（图片/音频）探测 | 开启 |
@@ -54,13 +54,14 @@ python probe_llm_api.py --base-url http://localhost:3000 --api-key sk-xxxx
 | `--long` / `--no-long` | 是否启用长文本探测 | 开启 |
 | `--long-tokens` | 长文本 token 数，逗号分隔 | `10000,100000` |
 | `--long-max-tokens` | 长文本探测允许生成的 token 上限 | `1024` |
+| `--long-timeout` | 长文本探测单次请求超时（秒） | `600` |
 | `--html-out` | HTML 报告输出路径 | `report.html` |
 | `-j, --json` | 以 JSON 输出原始结果 | 关闭 |
 | `-v, --verbose` | 输出完整响应体 | 关闭 |
 
 > 多模态开关默认开启，默认读取 `omni_test_data/` 目录下的 `222.jpg`（图片）与 `assistant.mp3`（音频）；文件缺失时该模态被跳过（不会报错）。图片探测会附提示词「这张图片有什么内容」。
 >
-> 长文本探测在占位文本前附一段详细分析提示词（要求输出摘要/结构/主题/统计/结论五部分），引导模型尽量多写，并用较大的 `max_tokens`（默认 1024）测量长输入下的吞吐与输出上限。
+> 长文本探测在开头加一段随机 `nonce`（防网关缓存/去重，确保每次真实走模型），后接详细分析提示词（要求输出摘要/结构/主题/统计/结论五部分）与占位文本，用较大的 `max_tokens`（默认 1024）与超时（默认 600 秒）测量长输入下的吞吐与输出上限。
 
 ## 示例
 

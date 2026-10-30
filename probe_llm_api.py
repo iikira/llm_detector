@@ -30,6 +30,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -48,6 +49,8 @@ def p(s=""):
         print(s.encode(_ENC, errors="replace").decode(_ENC, errors="replace"))
 
 DEFAULT_BASE_URL = "http://localhost:3000"
+DEFAULT_TIMEOUT = 60.0          # 单次请求默认超时（秒）
+LONG_TIMEOUT_DEFAULT = 600.0    # 长文本探测默认超时（秒），远大于常规
 
 # API Key 不从源码取，改从环境变量读取，避免把密钥写进公开仓库。
 DEFAULT_API_KEY = os.environ.get("LLM_PROBE_API_KEY", "")
@@ -145,8 +148,10 @@ def make_long_text(n_tokens):
 
 
 def make_long_content(n_tokens):
-    """长文本探测的完整 user content：详细分析提示词 + 占位长文本。"""
-    return LONG_PROMPT + make_long_text(n_tokens)
+    """长文本探测的完整 user content：随机串（防缓存）+ 详细分析提示词 + 占位长文本。
+    网关常按输入内容做缓存/去重，开头加一段随机串确保每次都真实走模型。"""
+    nonce = secrets.token_hex(8)   # 16 位十六进制随机串，几乎不会撞缓存
+    return f"[nonce:{nonce}]\n{LONG_PROMPT}{make_long_text(n_tokens)}"
 
 
 def _ext_to_openai_format(path):
@@ -207,21 +212,24 @@ def _group_rows(results, fmt):
 
 
 class Prober:
-    def __init__(self, base_url, api_key, timeout, verbose):
+    def __init__(self, base_url, api_key, timeout, verbose,
+                 long_timeout=LONG_TIMEOUT_DEFAULT):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        self.long_timeout = long_timeout or LONG_TIMEOUT_DEFAULT
         self.verbose = verbose
         self.results = []
 
-    def request(self, method, path, headers, payload=None, stream=False):
-        """发送请求。stream=True 时走 SSE 流式并统计首 token 时延(TTFT)。"""
+    def request(self, method, path, headers, payload=None, stream=False, timeout=None):
+        """发送请求。stream=True 时走 SSE 流式并统计首 token 时延(TTFT)。
+        timeout 覆盖实例默认超时（长文本探测用更大的超时）。"""
         url = self.base_url + path
         started = time.time()
         try:
             resp = requests.request(
-                method, url, headers=headers, json=payload, timeout=self.timeout,
-                stream=stream,
+                method, url, headers=headers, json=payload,
+                timeout=timeout or self.timeout, stream=stream,
             )
         except requests.RequestException as exc:
             return {
@@ -306,7 +314,7 @@ class Prober:
         return res, models
 
     def openai_chat(self, model, max_tokens=256, content=TEST_MESSAGE,
-                    label="openai /v1/chat/completions", extra=None):
+                    label="openai /v1/chat/completions", extra=None, timeout=None):
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": content}],
@@ -315,7 +323,7 @@ class Prober:
             "stream": True,
         }
         res = self.request("POST", "/v1/chat/completions", self.openai_headers(),
-                           payload, stream=True)
+                           payload, stream=True, timeout=timeout)
         text, completion_tokens = self._parse_openai_stream(res)
         res["stream_text"] = text
         res["completion_tokens"] = completion_tokens
@@ -339,13 +347,14 @@ class Prober:
             extra={"modality": modality, "media_file": path},
         )
 
-    def openai_long(self, model, n_tokens, max_tokens=LONG_MAX_TOKENS_DEFAULT):
+    def openai_long(self, model, n_tokens, max_tokens=LONG_MAX_TOKENS_DEFAULT, timeout=None):
         content = make_long_content(n_tokens)
         res = self.openai_chat(
             model, max_tokens,
             content=content,
             label=f"openai long {n_tokens}",
             extra={"input_tokens": n_tokens, "input_chars": len(content)},
+            timeout=timeout or self.long_timeout,
         )
         return res
 
@@ -383,7 +392,7 @@ class Prober:
         }
 
     def anthropic_messages(self, model, max_tokens=256, content=TEST_MESSAGE,
-                           label="anthropic /v1/messages", extra=None):
+                           label="anthropic /v1/messages", extra=None, timeout=None):
         payload = {
             "model": model,
             "max_tokens": max_tokens,
@@ -391,7 +400,7 @@ class Prober:
             "stream": True,
         }
         res = self.request("POST", "/v1/messages", self.anthropic_headers(),
-                           payload, stream=True)
+                           payload, stream=True, timeout=timeout)
         text, completion_tokens = self._parse_anthropic_stream(res)
         res["stream_text"] = text
         res["completion_tokens"] = completion_tokens
@@ -415,13 +424,14 @@ class Prober:
             extra={"modality": modality, "media_file": path},
         )
 
-    def anthropic_long(self, model, n_tokens, max_tokens=LONG_MAX_TOKENS_DEFAULT):
+    def anthropic_long(self, model, n_tokens, max_tokens=LONG_MAX_TOKENS_DEFAULT, timeout=None):
         content = make_long_content(n_tokens)
         res = self.anthropic_messages(
             model, max_tokens,
             content=content,
             label=f"anthropic long {n_tokens}",
             extra={"input_tokens": n_tokens, "input_chars": len(content)},
+            timeout=timeout or self.long_timeout,
         )
         return res
 
@@ -453,8 +463,8 @@ class Prober:
 
 def run(base_url, api_key, timeout, verbose, only, pattern, max_tokens, concurrency,
         multimodal=True, image_path=None, audio_path=None, long_=True, long_tokens=None,
-        long_max_tokens=LONG_MAX_TOKENS_DEFAULT):
-    prober = Prober(base_url, api_key, timeout, verbose)
+        long_max_tokens=LONG_MAX_TOKENS_DEFAULT, long_timeout=LONG_TIMEOUT_DEFAULT):
+    prober = Prober(base_url, api_key, timeout, verbose, long_timeout=long_timeout)
     p(f"目标: {base_url}")
     p(f"Key : {api_key[:8]}…{api_key[-4:]}")
     p("-" * 72)
@@ -753,7 +763,8 @@ _HTML_JS = r"""
         var okM = !q || q.value==='' ||
                   (tr._model||'').toLowerCase().indexOf(q.value.toLowerCase())>=0;
         var okS = !fst || fst.value==='' || tr._status===fst.value;
-        var okT = !fty || fty.value==='' || tr._kind===fty.value;
+        var okT = !fty || fty.value==='' ||
+                  (tr._kind||'').indexOf(fty.value) === 0;
         var show = okM && okS && okT;
         tr.classList.toggle('hidden', !show);
         // 隐藏行时也收起其详情
@@ -799,6 +810,17 @@ def _cell(value, suffix="ms"):
     if isinstance(value, (int, float)):
         return f"{value:.0f}{suffix}"
     return html.escape(str(value))
+
+
+def _fmt_long_variant(variant):
+    """把长文本的 token 数显示成紧凑的 k 形式：10000→10k，100000→100k。"""
+    try:
+        n = int(float(variant))
+    except (TypeError, ValueError):
+        return str(variant)
+    if n >= 1000 and n % 1000 == 0:
+        return f"{n // 1000}k"
+    return str(n)
 
 
 def _html_status_badge(r):
@@ -882,7 +904,8 @@ def _html_table(results, fmt):
         tps = f"{r.get('completion_tokens')/gen_time:.1f}" if gen_time and r.get("completion_tokens") else ""
         type_label = {"text": "文本", "image": "图片", "audio": "音频", "long": "长文本"}.get(kind, kind)
         variant = r.get("_variant") or ""
-        type_cell = type_label if not variant else f"{type_label} {variant}"
+        display_variant = _fmt_long_variant(variant) if kind == "long" else variant
+        type_cell = type_label if not display_variant else f"{type_label} {display_variant}"
         # 排序用数值秩：文本=0，图片=1，音频=2，长文本按其 token 数，便于按类型排序时分组并区分大小。
         tsort = {"text": 0, "image": 1, "audio": 2}.get(kind, 3)
         if kind == "long":
@@ -892,7 +915,7 @@ def _html_table(results, fmt):
                 tsort = 3
         body.append(
             f"<tr class='row' data-model='{html.escape(str(r.get('model')))}' "
-            f"data-type='{html.escape(type_label)}' data-kind='{html.escape(type_label)}' "
+            f"data-type='{html.escape(type_cell)}' data-kind='{html.escape(type_cell)}' "
             f"data-tsort='{tsort}' data-status='{ 'ok' if r['ok'] else 'err' }' "
             f"data-ttft='{r.get('ttft') or ''}' data-elapsed='{r.get('elapsed') or ''}' "
             f"data-tps='{tps or ''}' data-tok='{r.get('completion_tokens') or ''}'>"
@@ -915,7 +938,9 @@ def _html_table(results, fmt):
         f"<label>类型 <select class='f-type'>"
         f"<option value=''>全部</option><option value='文本'>文本</option>"
         f"<option value='图片'>图片</option><option value='音频'>音频</option>"
-        f"<option value='长文本'>长文本</option></select></label>"
+        f"<option value='长文本'>长文本</option>"
+        f"<option value='长文本 10k'>长文本 10k</option>"
+        f"<option value='长文本 100k'>长文本 100k</option></select></label>"
         f"<span class='count'></span></div>")
 
     return (f"<div class='table-block'>{toolbar}"
@@ -965,7 +990,8 @@ def main():
                         help="只测试指定格式")
     parser.add_argument("-p", "--pattern", default=None,
                         help="只测试名称匹配该正则的模型，例如 'deepseek|glm'")
-    parser.add_argument("-t", "--timeout", type=float, default=180.0, help="单次请求超时（秒）")
+    parser.add_argument("-t", "--timeout", type=float, default=DEFAULT_TIMEOUT,
+                        help="单次请求超时（秒）")
     parser.add_argument("-c", "--concurrency", type=int, default=4, help="并发请求数")
     parser.add_argument("--max-tokens", type=int, default=256, help="每次测试允许生成的 token 上限")
     parser.add_argument("--multimodal", action="store_true", default=True,
@@ -979,6 +1005,8 @@ def main():
                         help="长文本 token 数，逗号分隔，例如 '10000,100000'")
     parser.add_argument("--long-max-tokens", type=int, default=LONG_MAX_TOKENS_DEFAULT,
                         help="长文本探测允许生成的 token 上限（默认 1024，便于测量长输出）")
+    parser.add_argument("--long-timeout", type=float, default=LONG_TIMEOUT_DEFAULT,
+                        help="长文本探测单次请求超时（秒），默认 600")
     parser.add_argument("--image-path", default=DEFAULT_IMAGE_PATH,
                         help="图片文件路径（默认 omni_test_data/222.jpg，可覆盖）")
     parser.add_argument("--audio-path", default=DEFAULT_AUDIO_PATH,
@@ -997,7 +1025,7 @@ def main():
                   args.verbose, args.only, args.pattern,
                   args.max_tokens, args.concurrency,
                   args.multimodal, args.image_path, args.audio_path,
-                  args.long, long_tokens, args.long_max_tokens)
+                  args.long, long_tokens, args.long_max_tokens, args.long_timeout)
 
     write_html_report(results, args.html_out)
 
