@@ -1,0 +1,5 @@
+# 运行输出，含真实网关地址与 token 用量，不入库
+full_report.txt
+report.html
+__pycache__/
+*.pyc
