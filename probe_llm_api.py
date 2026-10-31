@@ -211,6 +211,33 @@ def _group_rows(results, fmt):
     return rows
 
 
+def _has_stream_text(data):
+    """判断某条 SSE data 块是否含真实输出文本。
+    OpenAI 看 delta.content / delta.reasoning，Anthropic 看 delta.text / delta.thinking。
+    用于让 TTFT 以“首个含真实内容”的块为准，跳过空 role/header 块。"""
+    try:
+        obj = json.loads(data)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(obj, dict):
+        return False
+    # Anthropic: content_block_delta.delta.{text,thinking}
+    d = obj.get("delta")
+    if isinstance(d, dict):
+        for k in ("text", "thinking", "content", "reasoning"):
+            if isinstance(d.get(k), str) and d[k].strip():
+                return True
+    # OpenAI: choices[0].delta.{content,reasoning}
+    choices = obj.get("choices")
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        delta = choices[0].get("delta") or {}
+        if isinstance(delta, dict):
+            for k in ("content", "reasoning"):
+                if isinstance(delta.get(k), str) and delta[k].strip():
+                    return True
+    return False
+
+
 class Prober:
     def __init__(self, base_url, api_key, timeout, verbose,
                  long_timeout=LONG_TIMEOUT_DEFAULT):
@@ -277,9 +304,11 @@ class Prober:
                 if not line.startswith("data:"):
                     continue
                 data = line[len("data:"):].strip()
+                # TTFT 端到端：从发请求到“首个含真实内容的块”。首块常是空的
+                # role/header（如 {"delta":{"content":""}}），不计入首 token。
                 if first_token_at is None and data and data != "[DONE]":
-                    # 以“出现首个含内容的数据块”作为首 token 时刻
-                    first_token_at = time.time()
+                    if _has_stream_text(data):
+                        first_token_at = time.time()
                 last_event_at = time.time()
         except requests.RequestException as exc:
             raw_lines.append(f"<stream error: {exc}>")
@@ -809,6 +838,13 @@ def _cell(value, suffix="ms"):
     return html.escape(str(value))
 
 
+def _cell_ms(seconds):
+    """时延单元格：秒 -> 毫秒整数（与终端 _fmt_sec 一致），None 显示 '-'。"""
+    if seconds is None:
+        return "-"
+    return f"{seconds * 1000:.0f}ms"
+
+
 def _fmt_long_variant(variant):
     """把长文本的 token 数显示成紧凑的 k 形式：10000→10k，100000→100k。"""
     try:
@@ -919,8 +955,8 @@ def _html_table(results, fmt):
             f"<td>{html.escape(str(r.get('model')))}</td>"
             f"<td>{html.escape(type_cell)}</td>"
             f"<td>{_html_status_badge(r)}</td>"
-            f"<td class='num'>{_cell(r.get('ttft'))}</td>"
-            f"<td class='num'>{_cell(r.get('elapsed'))}</td>"
+            f"<td class='num'>{_cell_ms(r.get('ttft'))}</td>"
+            f"<td class='num'>{_cell_ms(r.get('elapsed'))}</td>"
             f"<td class='num'>{tps or '-'}</td>"
             f"<td class='num'>{_cell(r.get('completion_tokens'), '')}</td>"
             f"<td><span class='expand'>展开</span></td></tr>"

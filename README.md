@@ -61,6 +61,8 @@ python probe_llm_api.py --base-url http://localhost:3000 --api-key sk-xxxx
 > 多模态开关默认开启，默认读取 `omni_test_data/` 目录下的 `222.jpg`（图片）与 `assistant.mp3`（音频）；文件缺失时该模态被跳过（不会报错）。图片探测会附提示词「这张图片有什么内容」。
 >
 > 长文本探测在开头加一段随机 `nonce`（防网关缓存/去重，确保每次真实走模型），后接详细分析提示词（要求输出摘要/结构/主题/统计/结论五部分）与占位文本，用较大的 `max_tokens`（默认 1024）与超时（默认 600 秒）测量长输入下的吞吐与输出上限。
+>
+> 时延统计为端到端：TTFT = 从发请求到首个含真实内容的 token 块（跳过空 role/header 块），整体 = 从发请求到流结束，均含网络往返与网关处理时间。快速验证网关可用性时，可用 `--only openai --no-multimodal --no-long` 只跑 OpenAI 文本探测。
 
 ## 示例
 
