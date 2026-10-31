@@ -52,7 +52,6 @@ python probe_llm_api.py --base-url http://localhost:3000 --api-key sk-xxxx
 | `--image-path` | 图片文件路径（默认 `omni_test_data/222.jpg`，可覆盖） | `omni_test_data/222.jpg` |
 | `--audio-path` | 音频文件路径（默认 `omni_test_data/assistant.mp3`，可覆盖） | `omni_test_data/assistant.mp3` |
 | `--long` / `--no-long` | 是否启用长文本探测 | 开启 |
-| `--long-tokens` | 长文本 token 数，逗号分隔 | `10000,100000` |
 | `--long-max-tokens` | 长文本探测允许生成的 token 上限 | `1024` |
 | `--long-timeout` | 长文本探测单次请求超时（秒） | `600` |
 | `--html-out` | HTML 报告输出路径 | `report.html` |
@@ -77,9 +76,6 @@ python probe_llm_api.py --image-path "C:/Pictures/shot.png" --audio-path "C:/Dow
 
 # 只跑文本 hello，关闭多模态与长文本
 python probe_llm_api.py --no-multimodal --no-long
-
-# 自定义长文本 token 数
-python probe_llm_api.py --long-tokens 5000,20000
 
 # 输出 JSON 原始结果（仍会生成 report.html）
 python probe_llm_api.py --json -v

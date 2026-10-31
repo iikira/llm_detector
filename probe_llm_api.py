@@ -58,7 +58,7 @@ DEFAULT_API_KEY = os.environ.get("LLM_PROBE_API_KEY", "")
 ANTHROPIC_VERSION = "2023-06-01"
 TEST_MESSAGE = "hello"
 IMAGE_PROMPT = "这张图片有什么内容"
-LONG_TOKENS_DEFAULT = "10000,100000"
+LONG_TOKENS_DEFAULT = [10000, 100000]
 LONG_MAX_TOKENS_DEFAULT = 1024
 
 # 长文本探测的提示词：要求模型对长文本做多部分详细分析，引导其尽量多输出，
@@ -462,7 +462,7 @@ class Prober:
 
 
 def run(base_url, api_key, timeout, verbose, only, pattern, max_tokens, concurrency,
-        multimodal=True, image_path=None, audio_path=None, long_=True, long_tokens=None,
+        multimodal=True, image_path=None, audio_path=None, long_=True,
         long_max_tokens=LONG_MAX_TOKENS_DEFAULT, long_timeout=LONG_TIMEOUT_DEFAULT):
     prober = Prober(base_url, api_key, timeout, verbose, long_timeout=long_timeout)
     p(f"目标: {base_url}")
@@ -488,9 +488,6 @@ def run(base_url, api_key, timeout, verbose, only, pattern, max_tokens, concurre
         if audio_path and audio_media[0] is None:
             p("! 音频无法读取，音频探测被跳过")
 
-    if long_tokens is None:
-        long_tokens = [int(t) for t in LONG_TOKENS_DEFAULT.split(",") if t.strip().isdigit()]
-
     p(f"共 {len(models)} 个模型，并发 {concurrency}，逐个发送 '{TEST_MESSAGE}' 测试…\n")
 
     def test_model(model):
@@ -512,7 +509,7 @@ def run(base_url, api_key, timeout, verbose, only, pattern, max_tokens, concurre
                     prober.anthropic_multimodal(model, "audio", audio_media, audio_path, max_tokens)
 
         if long_:
-            for n in long_tokens:
+            for n in LONG_TOKENS_DEFAULT:
                 if only in ("openai", "both"):
                     prober.openai_long(model, n, long_max_tokens)
                 if only in ("anthropic", "both"):
@@ -999,10 +996,8 @@ def main():
     parser.add_argument("--no-multimodal", dest="multimodal", action="store_false",
                         help="关闭多模态探测")
     parser.add_argument("--long", action="store_true", default=True,
-                        help="测试长文本输入（默认 10k/100k token）")
+                        help="测试长文本输入（默认 10k token）")
     parser.add_argument("--no-long", dest="long", action="store_false", help="关闭长文本测试")
-    parser.add_argument("--long-tokens", default=LONG_TOKENS_DEFAULT,
-                        help="长文本 token 数，逗号分隔，例如 '10000,100000'")
     parser.add_argument("--long-max-tokens", type=int, default=LONG_MAX_TOKENS_DEFAULT,
                         help="长文本探测允许生成的 token 上限（默认 1024，便于测量长输出）")
     parser.add_argument("--long-timeout", type=float, default=LONG_TIMEOUT_DEFAULT,
@@ -1020,12 +1015,11 @@ def main():
         sys.exit("错误: 未设置 API Key。请通过环境变量 LLM_PROBE_API_KEY 或 --api-key 提供。")
 
     use_color = sys.stdout.isatty()
-    long_tokens = [int(t) for t in args.long_tokens.split(",") if t.strip().isdigit()]
     results = run(args.base_url, args.api_key, args.timeout,
                   args.verbose, args.only, args.pattern,
                   args.max_tokens, args.concurrency,
                   args.multimodal, args.image_path, args.audio_path,
-                  args.long, long_tokens, args.long_max_tokens, args.long_timeout)
+                  args.long, args.long_max_tokens, args.long_timeout)
 
     write_html_report(results, args.html_out)
 
